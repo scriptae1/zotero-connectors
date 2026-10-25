@@ -4,3 +4,6 @@ cert
 config.sh
 dist
 node_modules
+.idea
+.vscode
+.DS_Store
