@@ -162,6 +162,15 @@ Zotero.Connector = new function() {
 			options = {method: options};
 		}
 		var method = options.method;
+		// Scriptae has no desktop application to talk to. Answering like a closed application keeps the
+		// callers on their "not running" path, and nothing is sent to the local machine.
+		if (!Zotero.Prefs.get('connector.desktopEnabled')) {
+			if (Zotero.Connector.isOnline !== false) {
+				Zotero.Connector.isOnline = false;
+				Zotero.Connector.onStateChange(Zotero.Connector.clientVersion);
+			}
+			throw new Zotero.Connector.CommunicationError('Connector: there is no desktop application');
+		}
 		let localhostPermissionMissing = false;
 		if (Zotero.isSafari) {
 			const hasLocalhostPermission = await browser.permissions.contains({

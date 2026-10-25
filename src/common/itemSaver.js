@@ -83,7 +83,7 @@ ItemSaver.prototype = {
 	},
 
 	/**
-	 * Saves items to Standalone or the server
+	 * Saves items to the Scriptae server
 	 * @param items Items in Zotero.Item.toArray() format
 	 * @param {Function} [attachmentCallback] A callback that receives information about attachment
 	 *     save progress. The callback will be called as attachmentCallback(attachment, false, error)
@@ -92,15 +92,8 @@ ItemSaver.prototype = {
 	 */
 	saveItems: async function (items, attachmentCallback, itemsDoneCallback=()=>0) {
 		Zotero.debug(`ItemSaver.saveItems: Saving ${items.length} items`);
-		try {
-			return await this._saveToZotero(items, attachmentCallback, itemsDoneCallback);
-		}
-		catch (e) {
-			if (e.status == 0) {
-				return this._saveToServer(items, attachmentCallback, itemsDoneCallback);
-			}
-  			throw e;
-		}
+		// There is no desktop application to save to: everything goes to the Scriptae server
+		return this._saveToServer(items, attachmentCallback, itemsDoneCallback);
 	},
 	
 	_saveToZotero: async function (items, attachmentCallback, itemsDoneCallback=()=>0) {
