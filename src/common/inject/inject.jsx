@@ -90,8 +90,6 @@ Zotero.Inject = {
 		this._addMessageListeners();
 		this._addZoteroButtonElementListener();
 		
-		this._handleOAuthComplete()
-
 		if(document.readyState !== "complete") {
 			window.addEventListener("pageshow", function(e) {
 				if(e.target !== document) return;
@@ -102,17 +100,6 @@ Zotero.Inject = {
 		}	
 	},
 
-	/**
-	 * Call OAuth complete listeners if on the relevant URL
-	 */
-	_handleOAuthComplete() {
-		if(document.location.href.substr(0, ZOTERO_CONFIG.OAUTH.ZOTERO.CALLBACK_URL.length+1) === ZOTERO_CONFIG.OAUTH.ZOTERO.CALLBACK_URL+"?") {
-			Zotero.API.onAuthorizationComplete(document.location.href.substr(ZOTERO_CONFIG.OAUTH.ZOTERO.CALLBACK_URL.length+1));
-		} else if (document.location.href.substr(0, ZOTERO_CONFIG.OAUTH.ZOTERO.CALLBACK_URL.length+1) === ZOTERO_CONFIG.OAUTH.GOOGLE_DOCS.CALLBACK_URL+"#") {
-			Zotero.GoogleDocs_API.onAuthComplete(document.location.href);
-		}
-	},
-	
 	_addMessageListeners() {
 		// add listener for translate message from background page
 		Zotero.Messaging.addMessageListener("translate", function(data) {
@@ -362,44 +349,13 @@ Zotero.Inject = {
 	},
 	
 	/**
-	 * If Zotero is offline and attempting action fallback to zotero.org for first time: prompts about it
-	 * Prompt only available on BrowserExt which supports programmatic injection
-	 * Otherwise just resolves to true
+	 * Scriptae always saves to its server, there is no desktop application to check for or to ask about.
+	 * Kept because the save flows call it before they start.
 	 *
-	 * @param {Boolean} permissionPromptShown - Skip the localhost permission explanation before
-	 *     the status check, e.g., on a retry after it has already been displayed
 	 * return {Promise<Boolean>} whether the action should proceed
 	 */
-	async checkActionToServer(permissionPromptShown=false) {
-		var [firstSaveToServer, zoteroIsOnline] = await Zotero.Promise.all([
-			Zotero.Prefs.getAsync('firstSaveToServer'),
-			Zotero.Connector.checkIsOnline({active: true, permissionPromptShown})
-		]);
-		if (zoteroIsOnline) {
-			return true;
-		}
-		// null means Safari blocked the localhost request, leaving Zotero's status unknown
-		let localhostDenied = zoteroIsOnline === null;
-		if (!localhostDenied && Zotero.isSafari) {
-			await Zotero.HostPermissions.prompt({
-				domains: ['repo.zotero.org', 'api.zotero.org']
-			});
-		}
-		if (!firstSaveToServer) {
-			return true;
-		}
-		var result = await this.firstSaveToServerPrompt(localhostDenied);
-		if (result == 'server') {
-			Zotero.Prefs.set('firstSaveToServer', false);
-			return true;
-		}
-		else if (result == 'retry') {
-			// If we perform the retry immediately and Zotero is still unavailable the prompt returns instantly
-			// making the user interaction confusing so we wait a bit first
-			await Zotero.Promise.delay(500);
-			return this.checkActionToServer(true);
-		}
-		return false;
+	async checkActionToServer() {
+		return true;
 	},
 	
 	addKeyboardShortcut(eventDescriptor, fn, elem) {
