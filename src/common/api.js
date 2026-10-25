@@ -24,383 +24,279 @@
 */
 
 Zotero.API = new function() {
-	var _tokenSecret;
-	var config = ZOTERO_CONFIG;
+	const TOKEN_REFRESH_MARGIN = 60 * 1000;
+	const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+	let refreshing = null;
 	
 	/**
-	 * Decodes application/x-www-form-urlencoded data
+	 * Address of the Scriptae API, with a trailing slash. The "scriptae-api-url" preference lets a
+	 * development build point somewhere else than ZOTERO_CONFIG.API_URL.
 	 */
-	function _decodeFormData(postData) {
-		var splitData = postData.split("&");
-		var decodedData = {};
-		for(var i in splitData) {
-			var variable = splitData[i];
-			var splitIndex = variable.indexOf("=");
-			decodedData[decodeURIComponent(variable.substr(0, splitIndex))] =
-				decodeURIComponent(variable.substr(splitIndex+1).replace(/\+/g, "%20"));
+	function _apiURL() {
+		let url;
+		try {
+			url = Zotero.Prefs.get('scriptae-api-url');
 		}
-		return decodedData;
+		catch (e) {}
+		url = url || ZOTERO_CONFIG.API_URL;
+		return url.endsWith('/') ? url : url + '/';
 	}
 	
 	/**
-	 * Performs OAuth authorization
+	 * Fails with the message of the API when it sent one
+	 */
+	function _errorFromResponse(xhr, fallback) {
+		let message = fallback;
+		try {
+			let data = JSON.parse(xhr.responseText);
+			message = Array.isArray(data.message) ? data.message.join('. ') : (data.message || fallback);
+		}
+		catch (e) {}
+		let error = new Error(message);
+		error.status = xhr.status;
+		return error;
+	}
+	
+	function _storeSession(session, email) {
+		Zotero.Prefs.set('auth-accessToken', session.accessToken);
+		if (session.refreshToken) {
+			Zotero.Prefs.set('auth-refreshToken', session.refreshToken);
+		}
+		Zotero.Prefs.set('auth-expiresAt', session.accessTokenExpiresAt);
+		if (email) {
+			Zotero.Prefs.set('auth-username', email);
+		}
+	}
+	
+	/**
+	 * Called when the user needs to log in: the form is in the preferences, there is no window to open
+	 * from here
 	 */
 	this.authorize = async function() {
-		if (this._deferred) {
-			if (this._authWindow) {
-				Zotero.Connector_Browser.bringToFront(false, this._authWindow.tabs[0]);
-			}
-			return this._deferred.promise;
-		}
-		this._deferred = Zotero.Promise.defer();
-		this._deferred.promise
-			.then((r) => {this._deferred = null}, (e) => {this._deferred = null});
-		
-		var oauthSimple = new OAuthSimple(config.OAUTH.ZOTERO.CLIENT_KEY,
-			config.OAUTH.ZOTERO.CLIENT_SECRET);
-		oauthSimple.setURL(config.OAUTH.ZOTERO.REQUEST_URL);
-		oauthSimple.setAction("POST");
-		
-		let options = {
-			body: '',
-			headers: {"Authorization": oauthSimple.getHeaderString()}
-		};
-		try {
-			let xmlhttp = await Zotero.HTTP.request("POST", config.OAUTH.ZOTERO.REQUEST_URL, options)
-			// parse output and store token_secret
-			var data = _decodeFormData(xmlhttp.responseText);
-			_tokenSecret = data.oauth_token_secret;
-			
-			// get signed URL
-			oauthSimple.signatures(data);
-			oauthSimple.setURL(config.OAUTH.ZOTERO.AUTHORIZE_URL);
-			var signature = oauthSimple.sign();
-			
-			// add parameters
-			var url = signature.signed_url+"&library_access=1&notes_access=0&write_access=1&name=Zotero Connector for ";
-			if (Zotero.isChrome) {
-				url += "Chrome";
-			} else if(Zotero.isSafari) {
-				url += "Safari";
-			} else if (Zotero.isFirefox) {
-				url += "Firefox";
-			} else if (Zotero.isEdge) {
-				url += "Edge";
-			}
-			
-			this._authWindow = await Zotero.Connector_Browser.openWindow(url, {width: 900, height: 600, type: 'normal',
-				onClose: Zotero.API.onAuthorizationCancel.bind(Zotero.API)});
-		}		
-		catch (e) {
-			Zotero.logError(`OAuth request failed with ${e.status}; response was ${e.responseText}`);
-			this._deferred.reject(new Error("An invalid response was received from the Zotero server"));
-		}
-		return this._deferred.promise;
+		Zotero.Connector_Browser.openPreferences('general');
+		throw new Error('Log in to Scriptae in the extension preferences, then save again.');
 	};
 	
 	/**
-	 * Called when OAuth is complete
-	 * @param {String} data The query string received from OAuth
-	 * @param {Tab} tab The object corresponding to the tab where OAuth completed
+	 * Logs in with the credentials of a Scriptae account. The password is not kept, only the tokens.
+	 * @returns {Promise<Object>} The user info, as getUserInfo() returns it
 	 */
-	this.onAuthorizationComplete = async function(data, tab) {
-		// close auth window
-		// ensure that tab close listeners don't have a promise they can reject
-		// this is kinda awful.
-		let deferred = this._deferred;
-		this._deferred = null;
-		browser.tabs.remove(tab.id);
-		
-		if(!_tokenSecret) {
-			throw new Error("onAuthenticationComplete called with no outstanding OAuth request");
-		}
-		
-		var oauthSimple = new OAuthSimple(config.OAUTH.ZOTERO.CLIENT_KEY,
-			config.OAUTH.ZOTERO.CLIENT_SECRET);
-		oauthSimple.setURL(config.OAUTH.ZOTERO.ACCESS_URL);
-		oauthSimple.setParameters(_decodeFormData(data));
-		oauthSimple.signatures({oauth_token_secret: _tokenSecret});
-		oauthSimple.setAction("POST");
-		_tokenSecret = undefined;
-
-		let options = {
-			body: '',
-			headers: {"Authorization": oauthSimple.getHeaderString()}
-		};
-		try {
-			var xmlhttp = await Zotero.HTTP.request("POST", config.OAUTH.ZOTERO.ACCESS_URL, options)
-		}
-		catch(e) {
-			Zotero.logError(`OAuth access failed with ${e.status}; response was ${e.responseText}`);
-			return deferred.reject(new Error("An invalid response was received from the Zotero server"));
-		}
-		data = _decodeFormData(xmlhttp.responseText);
-
-		let keysUrl = config.API_URL + "users/" + data.userID + "/keys/current";
-		xmlhttp = await Zotero.HTTP.request("GET", keysUrl, {
-			headers: {
-				"Zotero-API-Key": data.oauth_token_secret,
-				"Zotero-API-Version": "3"
-			}
+	this.login = async function(email, password) {
+		let xhr = await Zotero.HTTP.request("POST", _apiURL() + "auth/token", {
+			body: JSON.stringify({ email: email.trim(), password }),
+			headers: { "Content-Type": "application/json" },
+			successCodes: false
 		});
-		try {
-			var json = JSON.parse(xmlhttp.responseText),
-				access = json.access;
-		} catch(e) {};
-		
-		let responseText = xmlhttp.responseText.replace(data.oauth_token_secret, '[API_KEY_HIDDEN]');
-
-		if(!access || !access.user) {
-			Zotero.logError("Key verification failed with "+xmlhttp.status+'; response was '+responseText);
-			Zotero.logError("Key verification failed with "+xmlhttp.status+'; response was '+xmlhttp.responseText);
-			return deferred.reject(new Error("API key could not be verified"));
+		if (xhr.status === 401) {
+			throw new Error('Incorrect email or password.');
 		}
-		
-		if(!access.user.library || !access.user.write) {
-			Zotero.logError("Generated key had inadequate permissions; response was "+responseText);
-			return deferred.reject(new Error("The key you have generated does not have adequate "+
-				"permissions to save items to your Zotero library. Please try again "+
-				"without modifying your key's permissions."));
+		if (xhr.status < 200 || xhr.status >= 300) {
+			throw _errorFromResponse(xhr, 'Login failed.');
 		}
-	
-		Zotero.Prefs.set('auth-token', data.oauth_token);
-		Zotero.Prefs.set('auth-token_secret', data.oauth_token_secret);
-		Zotero.Prefs.set('auth-userID', data.userID);
-		Zotero.Prefs.set('auth-username', data.username);
-		
-		return deferred.resolve({"auth-username": data.username, "auth-userID": data.userID});
-	};
-	
-	this.onAuthorizationCancel = function() {
-		if (this._deferred) {
-			this._deferred.reject(new Error('Authorization cancelled.'));
-		}
+		_storeSession(JSON.parse(xhr.responseText), email.trim().toLowerCase());
+		return this.getUserInfo();
 	};
 	
 	/**
-	 * Clears OAuth credentials from storage and revokes the API
+	 * Forgets the tokens of this browser
 	 */
 	this.clearCredentials = async function() {
-		let token;
-		try {
-			token = Zotero.Prefs.get('auth-token_secret');
-		}
-		catch (e) {
-			// No credentials stored
-		}
-		let keys = ['auth-token', 'auth-token_secret', 'auth-userID', 'auth-username'];
-		Zotero.Prefs.clear(keys);
-		if (token) {
-			await this._revokeKey(token);
-		}
-	};
-
-	/**
-	 * Attempt to revoke a Zotero API key.
-	 * On failure the token is stashed in prefs and retried on next startup.
-	 */
-	this._revokeKey = async function(token) {
-		const url = config.API_URL + "keys/" + encodeURIComponent(token);
-		const options = {
-			headers: {
-				"Zotero-API-Key": token,
-				"Zotero-API-Version": "3"
-			},
-			successCodes: false
-		};
-		let status;
-		try {
-			const xhr = await Zotero.HTTP.request("DELETE", url, options);
-			status = xhr.status;
-		}
-		catch (e) {
-			status = 0;
-		}
-		// 4xx means the key is already revoked so no need to retry
-		if (status === 0 || status >= 500) {
-			Zotero.logError(`API: Failed to revoke API key server-side (status ${status}). `
-				+ `Will retry on next startup.`);
-			Zotero.Prefs.set('pending-auth-revocation', token);
-		}
-		else {
-			Zotero.debug(`API: Revoked Zotero API key server-side (status ${status})`);
-			Zotero.Prefs.clear('pending-auth-revocation');
-		}
-	};
-
-	/**
-	 * Called during startup to flush any API key revocation that
-	 * previously failed due to transient network issues.
-	 */
-	this.retryPendingRevocation = async function() {
-		let pending;
-		try {
-			pending = Zotero.Prefs.get('pending-auth-revocation');
-		}
-		catch (e) {
-			return;
-		}
-		if (!pending) return;
-		Zotero.debug("API: Retrying pending API key revocation");
-		await this._revokeKey(pending);
+		Zotero.Prefs.clear(['auth-accessToken', 'auth-refreshToken', 'auth-expiresAt', 'auth-username']);
 	};
 	
 	/**
-	 * Gets authorized username
-	 * @param {Function} callback Callback to receive username (or null if none is define)
+	 * Gets the logged in user
+	 * @returns {Promise<Object|null>} null when nobody is logged in
 	 */
 	this.getUserInfo = async function() {
-		let keys = ['auth-token_secret', 'auth-userID', 'auth-username'];
-		return Zotero.Prefs.getAsync(keys).catch(function() {
+		try {
+			let info = await Zotero.Prefs.getAsync(['auth-refreshToken', 'auth-username']);
+			if (!info['auth-refreshToken']) return null;
+			return { username: info['auth-username'], 'auth-username': info['auth-username'] };
+		}
+		catch (e) {
 			return null;
-		});
+		}
 	};
 	
 	/**
-	 * Creates a new item. In Safari, this runs in the background script. In Chrome, it
-	 * runs in the injected script.
-	 * @param {Object} payload Item(s) to create, in the object format expected by the server.
-	 * @param {String|null} itemKey Parent item key, or null if a top-level item.
-	 * @param {Boolean} [askForAuth] If askForAuth === false, don't ask for authorization if not 
-	 *     already authorized.
+	 * Gets an access token, renewed when it is about to expire.
+	 * @param {Boolean} [force] Renew it even if it looks valid (the API refused it)
 	 */
-	this.createItem = async function(payload, askForAuth) {
-		var userInfo = await Zotero.API.getUserInfo();
-		if(!userInfo) {
-			if(askForAuth === false) {
-				throw new Error("Not authorized");
-			}
-			return Zotero.API.authorize().then(function() {
-				return Zotero.API.createItem(payload, false);
-			}, function(e) {
-				e.message = `Authentication failed: ${e.message}`;
-				throw e;
-			})
+	async function _getAccessToken(force = false) {
+		let session;
+		try {
+			session = await Zotero.Prefs.getAsync(['auth-accessToken', 'auth-refreshToken', 'auth-expiresAt']);
+		}
+		catch (e) {
+			throw new Error('Not authorized');
+		}
+		if (!session['auth-refreshToken']) throw new Error('Not authorized');
+		
+		let expiresAt = Number(session['auth-expiresAt']) || 0;
+		if (!force && session['auth-accessToken'] && expiresAt - Date.now() > TOKEN_REFRESH_MARGIN) {
+			return session['auth-accessToken'];
 		}
 		
-		var url = config.API_URL + "users/" + userInfo['auth-userID'] + "/items";
-		var options = {
-			body: JSON.stringify(payload),
-			headers: {
-				"Content-Type": "application/json",
-				"Zotero-API-Key": userInfo['auth-token_secret'],
-				"Zotero-API-Version": "3"
-			}
-		};
-		try {
-			var xhr = await Zotero.HTTP.request("POST", url, options);
-			return xhr.responseText;
-		}
-		catch(e) {
-			if (e.status === 403 && askForAuth !== false) {
-				// Stored API key may have been revoked, so clear credentials and reauthorize
+		// concurrent requests share one renewal
+		refreshing = refreshing || (async () => {
+			let xhr = await Zotero.HTTP.request("POST", _apiURL() + "auth/token/refresh", {
+				body: JSON.stringify({ refreshToken: session['auth-refreshToken'] }),
+				headers: { "Content-Type": "application/json" },
+				successCodes: false
+			});
+			if (xhr.status === 401) {
+				// the refresh token was revoked or has expired: the user has to log in again
 				await Zotero.API.clearCredentials();
-				return Zotero.API.createItem(payload);
+				throw new Error('Not authorized');
 			}
-			Zotero.logError(e);
+			if (xhr.status < 200 || xhr.status >= 300) {
+				throw _errorFromResponse(xhr, 'The session could not be renewed.');
+			}
+			let renewed = JSON.parse(xhr.responseText);
+			_storeSession(renewed);
+			return renewed.accessToken;
+		})().finally(() => refreshing = null);
+		
+		return refreshing;
+	}
+	
+	/**
+	 * Calls the API with the token of the user, once more with a new token if the first was refused
+	 */
+	async function _request(method, path, options = {}, askForAuth = true) {
+		let token;
+		try {
+			token = await _getAccessToken();
+		}
+		catch (e) {
+			if (e.message === 'Not authorized' && askForAuth) {
+				await Zotero.API.authorize();
+			}
 			throw e;
-		};
+		}
+		
+		let send = (accessToken) => Zotero.HTTP.request(method, _apiURL() + path, {
+			...options,
+			headers: { ...(options.headers || {}), "Authorization": "Bearer " + accessToken },
+			successCodes: false
+		});
+		
+		let xhr = await send(token);
+		if (xhr.status === 401) {
+			xhr = await send(await _getAccessToken(true));
+		}
+		if (xhr.status < 200 || xhr.status >= 300) {
+			throw _errorFromResponse(xhr, `Scriptae API: ${method} ${path} failed with ${xhr.status}`);
+		}
+		return xhr;
+	}
+	
+	/**
+	 * What the API accepts of an item: the fields are strings, the tags and the creators have a fixed
+	 * shape and whatever belongs to Zotero's own sync (keys, versions, relations) is left out.
+	 */
+	function _toScriptaItem(zoteroItem) {
+		const SKIPPED = ['key', 'version', 'parentItem', 'collections', 'relations', 'itemType', 'dateAdded',
+			'dateModified', 'deleted', 'inPublications', 'id', 'itemID'];
+		let data = {};
+		for (let [field, value] of Object.entries(zoteroItem)) {
+			if (SKIPPED.includes(field) || value === undefined || value === null) continue;
+			if (field === 'tags') {
+				let tags = (Array.isArray(value) ? value : [])
+					.map(tag => typeof tag === 'string' ? tag : tag && tag.tag)
+					.filter(tag => typeof tag === 'string' && tag.trim());
+				if (tags.length) data.tags = tags.map(tag => ({ tag: tag.trim().slice(0, 255) }));
+			}
+			else if (field === 'creators') {
+				if (Array.isArray(value) && value.length) data.creators = value;
+			}
+			else if (field === 'accessDate' && value === 'CURRENT_TIMESTAMP') {
+				data.accessDate = new Date().toISOString();
+			}
+			else if (typeof value === 'object') {
+				continue;
+			}
+			else {
+				data[field] = String(value);
+			}
+		}
+		return { itemType: zoteroItem.itemType, data };
+	}
+	
+	/**
+	 * Creates items. The payload is what Zotero.Utilities.Item.itemToAPIJSON() produces: a top-level
+	 * item followed by its notes, which point to it with `parentItem` (a key made by the connector).
+	 * @param {Object[]} payload Items to create
+	 * @param {Boolean} [askForAuth] If false, don't ask the user to log in when nobody is
+	 * @returns {Promise<String>} A JSON string like Zotero's write API answers:
+	 *     {"success": {"0": "<id>"}, "failed": {}}, indexed by the position in the payload
+	 */
+	this.createItem = async function(payload, askForAuth) {
+		let ids = {};
+		let result = { success: {}, failed: {} };
+		
+		for (let [index, zoteroItem] of payload.entries()) {
+			let item = _toScriptaItem(zoteroItem);
+			if (zoteroItem.parentItem) {
+				// A note points to a key made by the connector in this same payload, an attachment to
+				// the id the API gave to its parent in a previous call
+				let parentId = ids[zoteroItem.parentItem]
+					|| (UUID.test(zoteroItem.parentItem) ? zoteroItem.parentItem : null);
+				if (!parentId) {
+					result.failed[index] = { message: 'The parent item was not created' };
+					continue;
+				}
+				item.parentId = parentId;
+			}
+			
+			try {
+				let xhr = await _request('POST', 'library/items', {
+					body: JSON.stringify(item),
+					headers: { "Content-Type": "application/json" }
+				}, askForAuth !== false);
+				let created = JSON.parse(xhr.responseText);
+				result.success[index] = created.id;
+				if (zoteroItem.key) ids[zoteroItem.key] = created.id;
+			}
+			catch (e) {
+				if (e.message === 'Not authorized') throw e;
+				Zotero.logError(e);
+				result.failed[index] = { message: e.message };
+			}
+		}
+		
+		return JSON.stringify(result);
 	};
 	
 	/**
-	 * Uploads an attachment to the Zotero server.
+	 * Uploads the file of an attachment item
 	 * @param {Object} attachment An attachment object. This object must have the following keys<br>
 	 *     data - the attachment contents, as a typed array<br>
 	 *     filename - a filename for the attachment<br>
-	 *     key - the attachment item key<br>
-	 *     md5 - the MD5 hash of the attachment contents<br>
+	 *     key - the id of the attachment item, as createItem() returned it<br>
 	 *     mimeType - the attachment MIME type
 	 */
 	this.uploadAttachment = async function(attachment) {
-		const REQUIRED_PROPERTIES = ["data", "key", "md5", "mimeType"];
-		for (const property of REQUIRED_PROPERTIES) {
+		for (const property of ["data", "key", "mimeType"]) {
 			if (!attachment[property]) {
 				throw new Error('Required property "' + property + '" not defined');
 			}
 		}
-		
-		if (/[^a-zA-Z0-9]/.test(attachment.key)) {
+		if (!/^[0-9a-f-]{36}$/i.test(attachment.key)) {
 			throw new Error('Attachment key is invalid');
 		}
 		
-		var data = {
-			"md5":attachment.md5,
-			"filename":attachment.filename,
-			"filesize":attachment.data.byteLength,
-			"mtime":(+new Date),
-			"contentType":attachment.mimeType
-		};
-		if (attachment.charset) data.charset = attachment.charset;
-		var dataString = [];
-		for (const [key, value] of Object.entries(data)) {
-			dataString.push(`${key}=${encodeURIComponent(value)}`);
-		}
-		data = dataString.join("&");
-		
-		const userInfo = await Zotero.API.getUserInfo()
-		if (!userInfo) {
-			// We should always have authorization credentials, since an item needs to
-			// be created before we can upload data. Thus, this code is probably
-			// unreachable, but it's here just in case.
-			throw new Error("No authorization credentials available");
-		}
-		
-		const url = config.API_URL + "users/" + userInfo['auth-userID'] + "/items/" + attachment.key + "/file";
-		let options = {
-			body: data,
-			headers: {
-				"Content-Type": "application/x-www-form-urlencoded",
-				"If-None-Match": "*",
-				"Zotero-API-Key": userInfo['auth-token_secret'],
-				"Zotero-API-Version": "3"
-			}
-		};
-		let xhr = await Zotero.HTTP.request("POST", url, options);
-		try {
-			var response = JSON.parse(xhr.responseText);
-		} catch(e) {
-			throw new Error("Error parsing JSON from server");
-		}
-		
-		// { "exists": 1 } implies no further action necessary
-		if (response.exists) {
-			Zotero.debug("OAuth: Attachment exists; no upload necessary");
-			return attachment;
-		}
-		
-		Zotero.debug("OAuth: Upload authorized");
-		
-		// Append prefix and suffix to data array
-		var prefixLength = Zotero.Utilities.getStringByteLength(response.prefix),
-			suffixLength = Zotero.Utilities.getStringByteLength(response.suffix),
-			uploadData = new Uint8Array(attachment.data.byteLength + prefixLength
-				+ suffixLength);
-		Zotero.Utilities.stringToUTF8Array(response.prefix, uploadData, 0);
-		uploadData.set(new Uint8Array(attachment.data), prefixLength);
-		Zotero.Utilities.stringToUTF8Array(response.suffix, uploadData,
-			attachment.data.byteLength+prefixLength);
-		
-		await Zotero.HTTP.request("POST", response.url, {
-			headers: {
-				"Zotero-API-Key": userInfo['auth-token_secret'],
-				"Zotero-API-Version": "3",
-				"Content-Type": response.contentType
-			},
-			body: uploadData.buffer
-		})
-		// Upload complete; register it
-		options = {
-			body: `upload=${response.uploadKey}`,
-			headers: {
-				"Content-Type": "application/x-www-form-urlencoded",
-				"If-None-Match": "*",
-				"Zotero-API-Key": userInfo['auth-token_secret'],
-				"Zotero-API-Version": "3"
-			},
-			successCodes: false
-		};
-		await Zotero.HTTP.request("POST", url, options);
-		Zotero.debug("Zotero API: Upload registered");
+		let form = new FormData();
+		form.append('file', new Blob([attachment.data], { type: attachment.mimeType }),
+			attachment.filename || 'file');
+		// Zotero.HTTP.request turns any other body into JSON; this header makes it send the form as it is
+		// and let the browser add the boundary
+		await _request('PUT', `library/items/${attachment.key}/file`, {
+			body: form,
+			headers: { "Content-Type": "multipart/form-data" }
+		});
+		Zotero.debug("Scriptae API: Upload complete");
 		return attachment;
 	};
-}
+};

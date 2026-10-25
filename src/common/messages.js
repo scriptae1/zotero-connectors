@@ -260,10 +260,12 @@ var MESSAGES = {
 	},
 	API: {
 		authorize: true,
-		onAuthorizationComplete: false,
-		clearCredentials: false,
+		login: true,
+		clearCredentials: true,
 		getUserInfo: true,
-		run: true,
+		// runs in the background page: a request made from a web page would be subject to the CORS
+		// rules of that page
+		createItem: true,
 		uploadAttachment: {
 			inject: {
 				preSend: async function(args) {

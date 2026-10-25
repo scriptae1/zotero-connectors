@@ -345,6 +345,10 @@ Zotero.Prefs = new function() {
 		"connector.repo.lastCheck.localTime": 0,
 		"connector.repo.lastCheck.repoTime": 0,
 		"connector.url": 'http://127.0.0.1:23119/',
+		// Scriptae has no desktop application: nothing is sent to connector.url unless this is turned on
+		"connector.desktopEnabled": false,
+		// Address of the Scriptae API, empty for the one in ZOTERO_CONFIG
+		"scriptae-api-url": "",
 		"capitalizeTitles": false,
 		"interceptKnownFileTypes": true,
 		"allowedCSLExtensionHosts": ["^https://raw\\.githubusercontent\\.com/", "^https://gitee\\.com/.+/raw/"],
