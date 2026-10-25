@@ -172,30 +172,54 @@ Zotero_Preferences.General = {
 		ReactDOM.render(React.createElement(Zotero_Preferences.Components.ClientStatus, null),
 			document.getElementById("client-status"));
 		document.getElementById("general-button-clear-credentials").onclick = Zotero_Preferences.General.clearCredentials;
+		document.getElementById("general-login-form").onsubmit = Zotero_Preferences.General.login;
 
 		Zotero.API.getUserInfo().then(Zotero_Preferences.General.updateAuthorization);
 
 	},
 
 	/**
-	 * Updates the "Authorization" group based on a username
+	 * Updates the "Authorization" group based on the logged in user
 	 */
 	updateAuthorization: function(userInfo) {
 		document.getElementById('general-authorization-not-authorized').style.display = (userInfo ? 'none' : 'block');
 		document.getElementById('general-authorization-authorized').style.display = (!userInfo ? 'none' : 'block');
 		if(userInfo) {
 			document.getElementById('general-authorization-authorized-message').textContent
-					= Zotero.getString('preferences_onlineLibrary_authorized', [
-						ZOTERO_CONFIG.CLIENT_NAME, userInfo.username
-					]);
+					= `Logged in to ${ZOTERO_CONFIG.CLIENT_NAME} as ${userInfo.username}.`;
+		}
+	},
+
+	/**
+	 * Logs in with the email and the password of the form
+	 */
+	login: async function(event) {
+		event.preventDefault();
+		let error = document.getElementById('general-login-error');
+		let submit = document.getElementById('general-login-submit');
+		let password = document.getElementById('general-login-password');
+		error.textContent = '';
+		submit.disabled = true;
+		try {
+			let userInfo = await Zotero.API.login(
+				document.getElementById('general-login-email').value, password.value);
+			Zotero_Preferences.General.updateAuthorization(userInfo);
+		}
+		catch (e) {
+			error.textContent = e.message || 'Login failed.';
+		}
+		finally {
+			// the password never stays in the page
+			password.value = '';
+			submit.disabled = false;
 		}
 	},
 
 	/**
 	 * Clears authorization
 	 */
-	clearCredentials: function() {
-		Zotero.API.clearCredentials();
+	clearCredentials: async function() {
+		await Zotero.API.clearCredentials();
 		Zotero_Preferences.General.updateAuthorization(null);
 	},
 

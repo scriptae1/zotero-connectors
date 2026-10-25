@@ -46,12 +46,17 @@
 				<div class="group-title" data-l10n-id="preferences_saveToOnlineLibrary">Save to Zotero.org</div>
 				<div class="group-content">
 					<div id="general-authorization-not-authorized">
-						<p data-l10n-id="preferences_onlineLibrary_notAuthorized" data-l10n-client-name>Zotero Connector is not currently authorized to save items to zotero.org. You will be prompted for authorization if you try to save items while Zotero is not open.</p>
+						<p>Log in to your Scriptae account to save the references you find on the web to your library.</p>
+						<form id="general-login-form">
+							<p><label>Email<br><input type="email" id="general-login-email" autocomplete="username" required style="width: 20em"/></label></p>
+							<p><label>Password<br><input type="password" id="general-login-password" autocomplete="current-password" required style="width: 20em"/></label></p>
+							<p><input type="submit" value="Log in" id="general-login-submit"/> <span id="general-login-error" role="alert" style="color: #b00020"></span></p>
+						</form>
 					</div>
 					<div id="general-authorization-authorized" style="display:none">
 						<p id="general-authorization-authorized-message"></p>
 						<p>
-							<input type="button" value="Clear Credentials" id="general-button-clear-credentials" data-l10n-id="preferences_onlineLibrary_clearCredentials"/>
+							<input type="button" value="Log out" id="general-button-clear-credentials"/>
 						</p>
 						<p>
 							<label><input type="checkbox" data-pref="automaticSnapshots"/>&nbsp;<span data-l10n-id="preferences_onlineLibrary_automaticSnapshots">Automatically take snapshots when saving items</span></label>
